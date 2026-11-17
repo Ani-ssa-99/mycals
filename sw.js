@@ -1,6 +1,6 @@
 // Service worker : l'appli s'ouvre même sans connexion.
-const VERSION = "mycals-v5";
-const SHELL = ["./", "index.html", "styles.css", "app.js", "ai.js", "off.js", "foods.js", "tips.js", "manifest.webmanifest",
+const VERSION = "mycals-v6";
+const SHELL = ["./", "index.html", "styles.css", "app.js", "ai.js", "off.js", "foods.js", "tips.js", "cloud.js", "config.js", "manifest.webmanifest",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 
 self.addEventListener("install", e => {

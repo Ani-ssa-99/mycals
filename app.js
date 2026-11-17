@@ -2,6 +2,8 @@ import { BASE_FOODS } from "./foods.js";
 import { analyzeMeal, prepareImage, testKey } from "./ai.js";
 import { lookupBarcode, searchOFF } from "./off.js";
 import { RECIPES, SESSIONS, MOVES, PLANS } from "./tips.js";
+import * as C from "./cloud.js";
+import { PROVIDERS } from "./config.js";
 
 /* ---------- utilitaires ---------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -62,7 +64,10 @@ function load() {
 function save() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); }
   catch { toast("Stockage plein : supprime des photos ou exporte tes données"); }
+  if (cloud.user) C.scheduleBackup(cloud.user.uid, S);
 }
+/* état du compte */
+const cloud = { ready: !C.cloudEnabled, user: null, profile: null, following: new Set(), blocked: new Set(), admin: false };
 const day = k => (S.days[k] ||= { entries: [], water: 0 });
 
 /* ---------- calculs nutritionnels ---------- */
@@ -136,12 +141,17 @@ $("#fab").onclick = () => openAddMenu();
 
 function render() {
   const app = $("#app");
-  $("#tabbar").classList.toggle("hidden", !S.profile);
+  const needLogin = C.cloudEnabled && cloud.ready && !cloud.user && !S.settings.skipLogin;
+  $("#tabbar").classList.toggle("hidden", !S.profile || needLogin || !cloud.ready);
+  $("#fab").hidden = !S.profile || needLogin || !cloud.ready || !["today", "progress"].includes(tab);
+  if (!cloud.ready) { app.innerHTML = `<div class="onb" style="align-items:center"><img src="icons/icon-192.png" class="logo" alt=""><div class="spinner" style="margin-top:20px"></div></div>`; return; }
+  if (needLogin) return renderLogin(app);
   if (!S.profile) return renderOnboarding(app);
   if (tab === "today") renderToday(app);
   else if (tab === "progress") renderProgress(app);
   else if (tab === "foods") renderFoods(app);
   else if (tab === "tips") renderTips(app);
+  else if (tab === "community") renderCommunity(app);
   else renderProfile(app);
 }
 
@@ -1008,6 +1018,378 @@ function openSession(x) {
   });
 }
 
+
+/* ---------- Connexion ---------- */
+const PROVIDER_ICON = {
+  google: '<svg viewBox="0 0 48 48" width="20" height="20"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>',
+  facebook: '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="#1877F2" d="M24 12a12 12 0 1 0-13.9 11.9v-8.4H7.1V12h3V9.4c0-3 1.8-4.7 4.5-4.7 1.3 0 2.7.2 2.7.2v3h-1.5c-1.5 0-2 .9-2 1.9V12h3.4l-.5 3.5h-2.9v8.4A12 12 0 0 0 24 12z"/></svg>',
+};
+function renderLogin(app) {
+  app.innerHTML = `
+  <div class="onb">
+    <img src="icons/icon-192.png" alt="" class="logo">
+    <h1 class="hero-title">Bienvenue sur Mycals</h1>
+    <p class="muted">Suis tes calories en photo, retrouve tes conseils et rejoins la communauté pour partager astuces, recettes et progrès.</p>
+    <div class="btns" style="margin-top:18px">
+      ${PROVIDERS.google ? `<button class="btn social" data-p="google">${PROVIDER_ICON.google} Continuer avec Google</button>` : ""}
+      ${PROVIDERS.facebook ? `<button class="btn social" data-p="facebook">${PROVIDER_ICON.facebook} Continuer avec Facebook</button>` : ""}
+      ${PROVIDERS.email ? `<button class="btn social" id="email">✉️ Continuer avec mon e-mail</button>` : ""}
+    </div>
+    ${isIOS() && isStandalone() ? `<p class="tip" style="margin-top:12px">Sur iPhone, depuis l'appli installée, la connexion par e-mail est la plus fiable.</p>` : ""}
+    <button class="link-btn" id="skip">Continuer sans compte</button>
+    <p class="small muted" style="text-align:center">En continuant, tu acceptes la <a href="privacy.html" target="_blank">politique de confidentialité</a>.</p>
+  </div>`;
+  $$("[data-p]").forEach(b => (b.onclick = async () => {
+    b.disabled = true;
+    try { await C.signInProvider(b.dataset.p); } catch (e) { toast(e.message, 4000); }
+    b.disabled = false;
+  }));
+  const em = $("#email"); if (em) em.onclick = openEmailLogin;
+  $("#skip").onclick = () => { S.settings.skipLogin = true; save(); render(); };
+}
+function openEmailLogin() {
+  let mode = "login";
+  openSheet(`<h2 id="et">Connexion par e-mail</h2>
+    <div class="seg" id="em" style="margin-bottom:12px"><button class="on" data-v="login">J'ai un compte</button><button data-v="signup">Créer un compte</button></div>
+    <form class="stack" id="ef">
+      <label class="field" id="nf" hidden><span>Prénom ou pseudo</span><input class="input" id="nm" autocomplete="nickname" maxlength="40"></label>
+      <label class="field"><span>E-mail</span><input class="input" id="mail" type="email" autocomplete="email" inputmode="email" required></label>
+      <label class="field"><span>Mot de passe</span><input class="input" id="pw" type="password" autocomplete="current-password" minlength="6" required></label>
+      <button class="btn" type="submit" id="go">Se connecter</button>
+      <button class="link-btn" type="button" id="forgot">Mot de passe oublié ?</button>
+    </form>`, (s, close) => {
+    $$("#em button", s).forEach(b => (b.onclick = () => {
+      mode = b.dataset.v; $$("#em button", s).forEach(x => x.classList.toggle("on", x === b));
+      $("#nf", s).hidden = mode !== "signup"; $("#go", s).textContent = mode === "signup" ? "Créer mon compte" : "Se connecter";
+      $("#pw", s).autocomplete = mode === "signup" ? "new-password" : "current-password";
+    }));
+    $("#ef", s).onsubmit = async e => {
+      e.preventDefault();
+      const mail = $("#mail", s).value.trim(), pw = $("#pw", s).value;
+      const go = $("#go", s); go.disabled = true;
+      try {
+        if (mode === "signup") { const n = $("#nm", s).value.trim(); if (!n) throw new Error("Choisis un prénom ou un pseudo"); pendingName = n; await C.signUpEmail(mail, pw, n); }
+        else await C.signInEmail(mail, pw);
+        close();
+      } catch (err) { toast(err.message, 4000); go.disabled = false; }
+    };
+    $("#forgot", s).onclick = async () => {
+      const mail = $("#mail", s).value.trim(); if (!mail) return toast("Écris ton e-mail d'abord");
+      try { await C.resetPassword(mail); toast("E-mail de réinitialisation envoyé 📩", 3500); } catch (err) { toast(err.message, 4000); }
+    };
+  });
+}
+let pendingName = "";
+async function onSignedIn(user) {
+  cloud.user = user;
+  try {
+    const p = await C.ensureProfile(user);
+    if (pendingName && p.name !== pendingName) { p.name = pendingName; await C.saveProfile(user.uid, p); }
+    pendingName = "";
+    cloud.profile = p;
+    if (!S.profile) {
+      const b = await C.loadBackup(user.uid).catch(() => null);
+      if (b?.profile) { const key = S.settings.geminiKey; S = Object.assign(blank(), b); S.settings.geminiKey = key || ""; toast("Tes données ont été récupérées ✅", 3000); }
+    }
+    S.settings.skipLogin = false;
+    save();
+    C.myFollowing(user.uid).then(l => (cloud.following = new Set(l))).catch(() => {});
+    C.blockedList(user.uid).then(l => (cloud.blocked = new Set(l))).catch(() => {});
+    C.isAdmin(user.uid).then(a => (cloud.admin = a));
+  } catch (e) { console.warn(e); }
+}
+if (C.cloudEnabled) {
+  C.onUser(async user => {
+    if (user) await onSignedIn(user);
+    else Object.assign(cloud, { user: null, profile: null, following: new Set(), blocked: new Set(), admin: false });
+    cloud.ready = true; render();
+  });
+  setTimeout(() => { if (!cloud.ready) { cloud.ready = true; S.settings.skipLogin = true; render(); } }, 10000);
+}
+
+function accountCard() {
+  if (!C.cloudEnabled) return "";
+  if (!cloud.user) return `<div class="card"><h2>👤 Mon compte</h2><p class="small muted" style="margin-top:-4px">Connecte-toi pour rejoindre la communauté et sauvegarder ton journal en ligne.</p><button class="btn" id="login">Se connecter</button></div>`;
+  const p = cloud.profile || {};
+  return `<div class="card"><h2>👤 Mon compte</h2>
+    <div class="row" style="margin-bottom:12px">${avatar(p, 52)}<div class="grow"><b>${esc(p.name || "")}</b><div class="small muted">${esc(cloud.user.email || "")}</div><div class="small muted">Journal sauvegardé en ligne ☁️</div></div></div>
+    <div class="btns two"><button class="btn ghost" id="editp">Modifier mon profil</button><button class="btn ghost" id="logout">Se déconnecter</button></div>
+    <button class="link-btn" id="delacc" style="color:var(--danger)">Supprimer mon compte</button></div>`;
+}
+function bindAccountCard() {
+  const l = $("#login"); if (l) l.onclick = () => { S.settings.skipLogin = false; save(); render(); };
+  const e = $("#editp"); if (e) e.onclick = openEditProfile;
+  const o = $("#logout"); if (o) o.onclick = async () => { await C.logOut(); S.settings.skipLogin = true; save(); toast("Déconnectée"); render(); };
+  const d = $("#delacc"); if (d) d.onclick = () => openSheet(`<h2>Supprimer mon compte ?</h2><p class="muted">Ton profil, tes publications, tes abonnements et ta sauvegarde en ligne seront supprimés. Ton journal reste sur ce téléphone.</p>
+      <div class="btns two"><button class="btn ghost" data-close>Annuler</button><button class="btn" style="background:var(--danger)" id="y">Supprimer</button></div>`, (s, close) => {
+    $("#y", s).onclick = async () => {
+      $("#y", s).disabled = true;
+      try { await C.deleteAccount(cloud.user); close(); S.settings.skipLogin = true; save(); toast("Compte supprimé"); render(); }
+      catch (err) { toast(err.message, 4000); $("#y", s).disabled = false; }
+    };
+  });
+}
+
+/* ---------- Communauté ---------- */
+const KINDS = [
+  { id: "conseil", label: "Nutrition", emoji: "🥗" },
+  { id: "sport", label: "Sport", emoji: "💪" },
+  { id: "recette", label: "Recette", emoji: "🍲" },
+  { id: "progres", label: "Progrès", emoji: "🎉" },
+  { id: "question", label: "Question", emoji: "❓" },
+];
+const kindOf = id => KINDS.find(k => k.id === id) || KINDS[0];
+let commView = "all", commKind = "all", commCache = null;
+function avatar(p, size = 40) {
+  const initials = esc(String(p?.name || "?").trim().split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase());
+  return p?.photo ? `<img class="av" src="${esc(p.photo)}" alt="" style="width:${size}px;height:${size}px" referrerpolicy="no-referrer" onerror="this.outerHTML='<span class=&quot;av&quot; style=&quot;width:${size}px;height:${size}px&quot;>${initials}</span>'">`
+    : `<span class="av" style="width:${size}px;height:${size}px;font-size:${size * 0.38}px">${initials}</span>`;
+}
+function ago(d) {
+  const s = (Date.now() - d.getTime()) / 1000;
+  if (s < 60) return "à l'instant";
+  if (s < 3600) return `il y a ${Math.floor(s / 60)} min`;
+  if (s < 86400) return `il y a ${Math.floor(s / 3600)} h`;
+  if (s < 604800) return `il y a ${Math.floor(s / 86400)} j`;
+  return d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+}
+const linkify = t => esc(t).replace(/\n/g, "<br>");
+function renderCommunity(app) {
+  if (!C.cloudEnabled) {
+    app.innerHTML = `<div class="header"><h1>Communauté</h1></div><div class="card"><p>La communauté arrive très bientôt ✨</p><p class="small muted">Tu pourras partager tes astuces, tes recettes et tes progrès, et suivre tes amies.</p></div>`;
+    return;
+  }
+  if (!cloud.user) {
+    app.innerHTML = `<div class="header"><h1>Communauté</h1></div><div class="card" style="text-align:center"><div style="font-size:42px">👯‍♀️</div><h2>Rejoins la communauté</h2><p class="muted">Partage tes astuces nutrition et sport, pose tes questions, suis tes amies et encourage-vous.</p><button class="btn" id="login">Se connecter</button></div>`;
+    $("#login").onclick = () => { S.settings.skipLogin = false; save(); render(); };
+    return;
+  }
+  app.innerHTML = `
+    <div class="header"><div><div class="muted small">Entraide et motivation</div><h1>Communauté</h1></div>
+      <button class="icon-btn" id="members" aria-label="Trouver des membres">${ICON.search}</button></div>
+    <button class="card composer" id="compose">${avatar(cloud.profile)}<span class="muted">Partage une astuce, une recette, un progrès…</span></button>
+    <div class="seg" id="cv" style="margin-bottom:10px"><button data-v="all" class="${commView === "all" ? "on" : ""}">Tout le monde</button><button data-v="following" class="${commView === "following" ? "on" : ""}">Mes abonnements</button></div>
+    <div class="chips" id="ck" style="margin-bottom:12px">${[{ id: "all", label: "Tout", emoji: "" }, ...KINDS].map(k => `<button class="chip ${commKind === k.id ? "on" : ""}" data-v="${k.id}">${k.emoji} ${k.label}</button>`).join("")}</div>
+    <div id="feed"><div class="loading"><div class="spinner"></div></div></div>`;
+  $("#compose").onclick = openComposer;
+  $("#members").onclick = openMembers;
+  $$("#cv button").forEach(b => (b.onclick = () => { commView = b.dataset.v; commCache = null; renderCommunity(app); }));
+  $$("#ck .chip").forEach(b => (b.onclick = () => { commKind = b.dataset.v; renderCommunity(app); }));
+  loadFeed();
+}
+async function loadFeed(force) {
+  const el = $("#feed"); if (!el) return;
+  try {
+    if (!commCache || force) {
+      const posts = await C.feed(commView === "following" ? { uids: [...cloud.following] } : {});
+      const liked = await C.likedSet(cloud.user.uid, posts);
+      commCache = { posts, liked };
+    }
+    const posts = commCache.posts.filter(p => !cloud.blocked.has(p.uid) && (commKind === "all" || p.kind === commKind));
+    if (!$("#feed")) return;
+    if (!posts.length) {
+      el.innerHTML = commView === "following" && !cloud.following.size
+        ? `<div class="empty card">Tu ne suis encore personne. Touche 🔍 pour trouver des membres, ou va dans « Tout le monde ».</div>`
+        : `<div class="empty card">Aucune publication pour l'instant. Sois la première à partager ! ✨</div>`;
+      return;
+    }
+    el.innerHTML = posts.map(p => postCard(p, commCache.liked.has(p.id))).join("") + `<button class="btn ghost" id="refresh" style="margin-bottom:12px">Actualiser</button>`;
+    bindPosts(el);
+    $("#refresh").onclick = () => loadFeed(true);
+  } catch (e) {
+    console.warn(e);
+    el.innerHTML = `<div class="empty card">Impossible de charger la communauté. Vérifie ta connexion.<br><button class="btn sm" id="retry" style="margin-top:10px">Réessayer</button></div>`;
+    $("#retry").onclick = () => loadFeed(true);
+  }
+}
+function postCard(p, liked) {
+  const k = kindOf(p.kind);
+  const mine = p.uid === cloud.user.uid;
+  return `<article class="card post" data-pid="${p.id}">
+    <div class="row"><button class="ghost-btn" data-user="${p.uid}">${avatar(p)}</button>
+      <div class="grow"><button class="ghost-btn" data-user="${p.uid}"><b>${esc(p.name)}</b></button><div class="small muted">${ago(p.createdAt)}</div></div>
+      <span class="badge">${k.emoji} ${k.label}</span>
+      <button class="icon-btn more" data-more="${p.id}" aria-label="Options">⋯</button></div>
+    <div class="post-text">${linkify(p.text)}</div>
+    ${p.image ? `<img class="post-img" src="${p.image}" alt="" loading="lazy">` : ""}
+    <div class="post-actions">
+      <button class="act ${liked ? "on" : ""}" data-like="${p.id}">${liked ? "❤️" : "🤍"} <span>${p.likeCount || 0}</span></button>
+      <button class="act" data-open="${p.id}">💬 <span>${p.commentCount || 0}</span></button>
+      ${!mine && !cloud.following.has(p.uid) ? `<button class="act follow" data-follow="${p.uid}">+ Suivre</button>` : ""}
+    </div>
+  </article>`;
+}
+function bindPosts(el) {
+  const find = id => commCache?.posts.find(p => p.id === id) || memberPostsCache.find(p => p.id === id);
+  $$("[data-like]", el).forEach(b => (b.onclick = async () => {
+    const id = b.dataset.like; const p = find(id); const liked = commCache?.liked.has(id);
+    b.disabled = true;
+    try {
+      await C.toggleLike(cloud.user.uid, id, liked);
+      if (liked) commCache.liked.delete(id); else commCache.liked.add(id);
+      p.likeCount = (p.likeCount || 0) + (liked ? -1 : 1);
+      b.classList.toggle("on", !liked); b.innerHTML = `${liked ? "🤍" : "❤️"} <span>${p.likeCount}</span>`;
+      if (!liked) navigator.vibrate?.(8);
+    } catch { toast("Action impossible"); }
+    b.disabled = false;
+  }));
+  $$("[data-open]", el).forEach(b => (b.onclick = () => openPost(find(b.dataset.open))));
+  $$("[data-user]", el).forEach(b => (b.onclick = () => openMember(b.dataset.user)));
+  $$("[data-follow]", el).forEach(b => (b.onclick = async () => { await doFollow(b.dataset.follow, true); $$(`[data-follow="${b.dataset.follow}"]`).forEach(x => x.remove()); }));
+  $$("[data-more]", el).forEach(b => (b.onclick = () => openPostMenu(find(b.dataset.more))));
+}
+async function doFollow(uid, on) {
+  try {
+    if (on) { await C.follow(cloud.user.uid, uid); cloud.following.add(uid); toast("Tu suis ce membre ✨"); }
+    else { await C.unfollow(cloud.user.uid, uid); cloud.following.delete(uid); toast("Abonnement retiré"); }
+  } catch { toast("Action impossible"); }
+}
+function openPostMenu(p) {
+  const mine = p.uid === cloud.user.uid;
+  openSheet(`<div class="btns">
+    ${mine || cloud.admin ? `<button class="btn danger" id="del">Supprimer la publication</button>` : ""}
+    ${!mine ? `<button class="btn ghost" id="rep">Signaler la publication</button><button class="btn ghost" id="blk">Bloquer ${esc(p.name)}</button>` : ""}
+    <button class="btn ghost" data-close>Annuler</button></div>`, (s, close) => {
+    const d = $("#del", s); if (d) d.onclick = async () => { try { await C.deletePost(p.id); commCache.posts = commCache.posts.filter(x => x.id !== p.id); close(); closeAllSheets(); render(); toast("Publication supprimée"); } catch { toast("Suppression impossible"); } };
+    const r = $("#rep", s); if (r) r.onclick = () => { close(); openReport({ postId: p.id, targetUid: p.uid }); };
+    const bk = $("#blk", s); if (bk) bk.onclick = async () => { await C.block(cloud.user.uid, p.uid); cloud.blocked.add(p.uid); cloud.following.delete(p.uid); close(); closeAllSheets(); render(); toast("Membre bloqué. Tu ne verras plus ses publications."); };
+  });
+}
+function openReport(target) {
+  openSheet(`<h2>Signaler</h2><p class="small muted">Dis-nous ce qui ne va pas. Le signalement est anonyme.</p>
+    <div class="chips" id="rs" style="margin-bottom:12px">${["Contenu blessant ou harcèlement", "Conseil dangereux pour la santé", "Spam ou publicité", "Contenu inapproprié", "Autre"].map((r, i) => `<button class="chip ${i === 0 ? "on" : ""}">${r}</button>`).join("")}</div>
+    <textarea class="input" id="rt" rows="3" placeholder="Précisions (facultatif)"></textarea>
+    <button class="btn" id="send" style="margin-top:12px">Envoyer le signalement</button>`, (s, close) => {
+    $$("#rs .chip", s).forEach(b => (b.onclick = () => $$("#rs .chip", s).forEach(x => x.classList.toggle("on", x === b))));
+    $("#send", s).onclick = async () => {
+      try { await C.report(cloud.user.uid, { ...target, reason: $("#rs .on", s).textContent + ($("#rt", s).value ? " : " + $("#rt", s).value : "") }); close(); toast("Merci, c'est signalé 🙏"); }
+      catch { toast("Envoi impossible"); }
+    };
+  });
+}
+function openComposer() {
+  let kind = "conseil", image = "";
+  const lost = r1(S.profile.startWeightKg - currentWeight());
+  openSheet(`<h2>Nouvelle publication</h2>
+    <div class="chips" id="kk" style="margin-bottom:12px">${KINDS.map(k => `<button class="chip ${k.id === kind ? "on" : ""}" data-v="${k.id}">${k.emoji} ${k.label}</button>`).join("")}</div>
+    <textarea class="input" id="tx" rows="5" maxlength="1000" placeholder="Ton astuce, ta recette, ta question…"></textarea>
+    <div class="row" style="margin:10px 0 4px;gap:8px;flex-wrap:wrap">
+      <button class="btn sm ghost" id="pic">${ICON.image} Photo</button>
+      ${lost > 0 ? `<button class="btn sm ghost" id="prog">🎉 Partager mes −${fmt1(lost)} kg</button>` : ""}
+    </div>
+    <img id="pv" class="post-img" hidden alt="">
+    <p class="small muted">Reste bienveillante 💕 Les conseils partagés ne remplacent pas l'avis d'un professionnel de santé.</p>
+    <button class="btn" id="pub">Publier</button>`, (s, close) => {
+    $$("#kk .chip", s).forEach(b => (b.onclick = () => { kind = b.dataset.v; $$("#kk .chip", s).forEach(x => x.classList.toggle("on", x === b)); }));
+    $("#pic", s).onclick = () => {
+      const i = $("#photo-input-gallery"); i.value = "";
+      i.onchange = async () => { const f = i.files?.[0]; if (!f) return; try { const img = await prepareImage(f, 900); image = img.dataUrl.length > 390000 ? (await prepareImage(f, 640)).dataUrl : img.dataUrl; $("#pv", s).src = image; $("#pv", s).hidden = false; } catch { toast("Image illisible"); } };
+      i.click();
+    };
+    const pr = $("#prog", s); if (pr) pr.onclick = () => { kind = "progres"; $$("#kk .chip", s).forEach(x => x.classList.toggle("on", x.dataset.v === "progres")); $("#tx", s).value = `J'ai perdu ${fmt1(lost)} kg depuis le ${parseKey(S.profile.startDate).toLocaleDateString("fr-FR", { day: "numeric", month: "long" })} avec Mycals 💪 ${$("#tx", s).value}`.trim(); };
+    $("#pub", s).onclick = async () => {
+      const text = $("#tx", s).value.trim(); if (!text) return toast("Écris quelque chose");
+      const b = $("#pub", s); b.disabled = true; b.textContent = "Publication…";
+      try { await C.createPost(cloud.user, cloud.profile, { kind, text, image }); close(); commCache = null; commView = "all"; toast("Publié ✨"); setTab("community"); }
+      catch (e) { console.warn(e); toast("Publication impossible"); b.disabled = false; b.textContent = "Publier"; }
+    };
+  });
+}
+async function openPost(p) {
+  openSheet(`<div id="pp"></div><div id="cm"><div class="loading"><div class="spinner"></div></div></div>
+    <form class="row comment-form" id="cf"><input class="input" id="ct" maxlength="500" placeholder="Écrire un commentaire…" autocomplete="off"><button class="btn sm" type="submit">Envoyer</button></form>`, async (s, close) => {
+    $("#pp", s).innerHTML = postCard(p, commCache?.liked.has(p.id)).replace('class="card post"', 'class="post"');
+    bindPosts($("#pp", s));
+    const load = async () => {
+      try {
+        const list = (await C.comments(p.id)).filter(c => !cloud.blocked.has(c.uid));
+        $("#cm", s).innerHTML = list.length ? list.map(c => `<div class="comment"><button class="ghost-btn" data-user="${c.uid}">${avatar(c, 32)}</button><div class="grow"><div class="bubble"><b>${esc(c.name)}</b><div>${linkify(c.text)}</div></div>
+          <div class="small muted">${ago(c.createdAt)}${c.uid === cloud.user.uid || p.uid === cloud.user.uid || cloud.admin ? ` · <button class="link-btn inline" data-delc="${c.id}">Supprimer</button>` : ` · <button class="link-btn inline" data-repc="${c.id}" data-u="${c.uid}">Signaler</button>`}</div></div></div>`).join("")
+          : `<p class="muted small" style="text-align:center">Aucun commentaire. Lance la discussion !</p>`;
+        $$("[data-user]", $("#cm", s)).forEach(b => (b.onclick = () => openMember(b.dataset.user)));
+        $$("[data-delc]", s).forEach(b => (b.onclick = async () => { await C.deleteComment(p.id, b.dataset.delc); p.commentCount = Math.max(0, (p.commentCount || 1) - 1); load(); }));
+        $$("[data-repc]", s).forEach(b => (b.onclick = () => openReport({ postId: p.id, commentId: b.dataset.repc, targetUid: b.dataset.u })));
+      } catch { $("#cm", s).innerHTML = `<p class="muted small">Impossible de charger les commentaires.</p>`; }
+    };
+    load();
+    $("#cf", s).onsubmit = async e => {
+      e.preventDefault();
+      const t = $("#ct", s).value.trim(); if (!t) return;
+      $("#ct", s).value = "";
+      try { await C.addComment(cloud.user, cloud.profile, p.id, t); p.commentCount = (p.commentCount || 0) + 1; load(); $$(`[data-open="${p.id}"] span`).forEach(x => (x.textContent = p.commentCount)); }
+      catch { toast("Envoi impossible"); }
+    };
+  });
+}
+let memberPostsCache = [];
+async function openMember(uid) {
+  openSheet(`<div id="mb"><div class="loading"><div class="spinner"></div></div></div>`, async (s, close) => {
+    try {
+      const [p, stats, posts] = await Promise.all([C.getProfile(uid), C.profileStats(uid), C.postsOf(uid)]);
+      memberPostsCache = posts;
+      if (!commCache) commCache = { posts: [], liked: new Set() };
+      const liked = await C.likedSet(cloud.user.uid, posts); liked.forEach(id => commCache.liked.add(id));
+      const me = uid === cloud.user.uid;
+      const isF = cloud.following.has(uid);
+      $("#mb", s).innerHTML = `
+        <div style="text-align:center">${avatar(p || { name: "?" }, 76)}<h2 style="margin:8px 0 2px">${esc(p?.name || "Membre")}</h2>
+          ${p?.bio ? `<p class="muted" style="margin:0 0 8px">${esc(p.bio)}</p>` : ""}
+          <div class="stats-row"><div><b>${stats.posts}</b><span>publications</span></div><div><b>${stats.followers}</b><span>abonnées</span></div><div><b>${stats.following}</b><span>abonnements</span></div></div>
+          ${me ? `<button class="btn ghost" id="edit">Modifier mon profil</button>` : `<div class="btns two"><button class="btn ${isF ? "ghost" : ""}" id="fol">${isF ? "Abonnée ✓" : "Suivre"}</button><button class="btn ghost" id="more">⋯ Options</button></div>`}
+        </div>
+        <h3 style="margin:18px 0 8px">Publications</h3>
+        <div id="mposts">${posts.length ? posts.map(x => postCard(x, commCache.liked.has(x.id))).join("") : `<p class="muted small">Pas encore de publication.</p>`}</div>`;
+      bindPosts($("#mposts", s));
+      const e = $("#edit", s); if (e) e.onclick = () => { close(); openEditProfile(); };
+      const f = $("#fol", s); if (f) f.onclick = async () => { const on = !cloud.following.has(uid); await doFollow(uid, on); f.textContent = on ? "Abonnée ✓" : "Suivre"; f.classList.toggle("ghost", on); };
+      const m = $("#more", s); if (m) m.onclick = () => openSheet(`<div class="btns"><button class="btn ghost" id="rp">Signaler ce profil</button><button class="btn danger" id="bk">${cloud.blocked.has(uid) ? "Débloquer" : "Bloquer"}</button><button class="btn ghost" data-close>Annuler</button></div>`, (s2, c2) => {
+        $("#rp", s2).onclick = () => { c2(); openReport({ targetUid: uid }); };
+        $("#bk", s2).onclick = async () => {
+          if (cloud.blocked.has(uid)) { await C.unblock(cloud.user.uid, uid); cloud.blocked.delete(uid); toast("Débloquée"); }
+          else { await C.block(cloud.user.uid, uid); cloud.blocked.add(uid); cloud.following.delete(uid); toast("Membre bloqué"); }
+          closeAllSheets(); render();
+        };
+      });
+    } catch (err) { console.warn(err); $("#mb", s).innerHTML = `<p class="muted">Profil indisponible.</p>`; }
+  });
+}
+function openMembers() {
+  openSheet(`<h2>Trouver des membres</h2><input class="input" id="mq" type="search" placeholder="Prénom ou pseudo"><div id="ml" style="margin-top:10px"><div class="loading"><div class="spinner"></div></div></div>`, (s) => {
+    let all = [];
+    const show = () => {
+      const q = norm($("#mq", s).value);
+      const list = all.filter(p => p.uid !== cloud.user.uid && !cloud.blocked.has(p.uid) && (!q || norm(p.name).includes(q)));
+      $("#ml", s).innerHTML = list.length ? list.map(p => `<div class="food-row"><button class="ghost-btn" data-user="${p.uid}">${avatar(p, 44)}</button><div class="grow"><button class="ghost-btn" data-user="${p.uid}"><b>${esc(p.name)}</b></button><div class="small muted">${esc(p.bio || "")}</div></div>
+        <button class="btn sm ${cloud.following.has(p.uid) ? "ghost" : ""}" data-f="${p.uid}">${cloud.following.has(p.uid) ? "Abonnée" : "Suivre"}</button></div>`).join("") : `<p class="muted small">Personne trouvé.</p>`;
+      $$("[data-user]", s).forEach(b => (b.onclick = () => openMember(b.dataset.user)));
+      $$("[data-f]", s).forEach(b => (b.onclick = async () => { const on = !cloud.following.has(b.dataset.f); await doFollow(b.dataset.f, on); commCache = null; show(); }));
+    };
+    C.searchMembers("").then(l => { all = l; show(); }).catch(() => ($("#ml", s).innerHTML = `<p class="muted small">Recherche indisponible.</p>`));
+    $("#mq", s).oninput = show;
+  });
+}
+function openEditProfile() {
+  const p = cloud.profile || {};
+  let photo = p.photo || "";
+  openSheet(`<h2>Mon profil public</h2>
+    <div style="text-align:center;margin-bottom:12px"><span id="avp">${avatar({ ...p, photo }, 76)}</span><br><button class="btn sm ghost" id="ph" style="margin-top:8px">Changer la photo</button></div>
+    <div class="stack"><label class="field"><span>Prénom ou pseudo</span><input class="input" id="pn" maxlength="40" value="${esc(p.name || "")}"></label>
+    <label class="field"><span>Bio</span><textarea class="input" id="pb" rows="3" maxlength="160" placeholder="Ex. : Objectif −8 kg, fan de yoga et de cuisine healthy 🌸">${esc(p.bio || "")}</textarea></label>
+    <p class="small muted" style="margin:0">Ton journal et ton poids restent privés. Seuls ton nom, ta photo, ta bio et tes publications sont visibles des membres.</p>
+    <button class="btn" id="sv">Enregistrer</button></div>`, (s, close) => {
+    $("#ph", s).onclick = () => {
+      const i = $("#photo-input-gallery"); i.value = "";
+      i.onchange = async () => { const f = i.files?.[0]; if (!f) return; const img = await prepareImage(f, 256); photo = img.dataUrl; $("#avp", s).innerHTML = avatar({ ...p, photo }, 76); };
+      i.click();
+    };
+    $("#sv", s).onclick = async () => {
+      const name = $("#pn", s).value.trim(); if (!name) return toast("Choisis un nom");
+      try { await C.saveProfile(cloud.user.uid, { name, bio: $("#pb", s).value.trim(), photo }); cloud.profile = { ...p, name, bio: $("#pb", s).value.trim(), photo }; close(); render(); toast("Profil mis à jour"); }
+      catch { toast("Enregistrement impossible"); }
+    };
+  });
+}
+
 /* ---------- Profil ---------- */
 function renderProfile(app) {
   const t = targets();
@@ -1026,6 +1408,7 @@ function renderProfile(app) {
       <p class="small muted" style="margin-top:-4px">${S.settings.geminiKey ? `Activée ✅ ${S.settings.models?.[0] ? `(modèle ${esc(S.settings.models[0])})` : ""}` : "Pas encore activée. Gratuit, 1 minute."}</p>
       <button class="btn ${S.settings.geminiKey ? "ghost" : ""}" id="key">${S.settings.geminiKey ? "Gérer ma clé" : "Activer la reconnaissance photo"}</button>
     </div>
+    ${accountCard()}
     <div class="card">
       <h2>👯 Partager avec mes amis</h2>
       <p class="small muted" style="margin-top:-4px">L'appli est gratuite. Envoie le lien : ils l'installent sur leur écran d'accueil, et chacun garde ses propres données.</p>
@@ -1050,6 +1433,7 @@ function renderProfile(app) {
   };
   $("#det").onclick = () => showTargetResult(false);
   $("#myfoods").onclick = () => setTab("foods");
+  bindAccountCard();
   $("#ovr-ok").onclick = () => { const v = parseInt($("#ovr").value, 10); S.settings.targetOverride = v >= 800 && v <= 6000 ? v : null; save(); render(); toast(S.settings.targetOverride ? "Objectif personnalisé enregistré" : "Calcul automatique"); };
   $("#key").onclick = () => openKeySetup();
   $("#share").onclick = shareApp;
@@ -1060,7 +1444,7 @@ function renderProfile(app) {
   $("#reset").onclick = () => {
     openSheet(`<h2>Tout effacer ?</h2><p class="muted">Ton profil, ton journal et tes pesées seront supprimés de ce téléphone. Fais une sauvegarde avant si tu veux les garder.</p>
       <div class="btns two"><button class="btn ghost" data-close>Annuler</button><button class="btn" style="background:var(--danger)" id="y">Effacer</button></div>`, (s, close) => {
-      $("#y", s).onclick = () => { const key = S.settings.geminiKey; S = blank(); S.settings.geminiKey = key; save(); close(); tab = "today"; render(); };
+      $("#y", s).onclick = () => { const key = S.settings.geminiKey; S = blank(); S.settings.geminiKey = key; S.settings.skipLogin = true; save(); close(); tab = "today"; render(); };
     });
   };
 }
