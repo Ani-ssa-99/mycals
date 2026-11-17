@@ -272,3 +272,24 @@ a { color: var(--accent-2); }
   .badge.warn { background: #4a2a1c; color: #f0b48f; }
 }
 .btn.secondary { background: var(--accent-soft); }
+
+/* Molette défilante */
+.ruler { position: relative; background: var(--bg); border: 1px solid var(--line); border-radius: 16px; padding: 10px 0 0; overflow: hidden; }
+.ruler-head { display: flex; align-items: center; justify-content: space-between; padding: 0 12px; }
+.ruler-label { font-size: 13px; font-weight: 600; color: var(--muted); }
+.ruler-val { display: flex; align-items: center; gap: 4px; }
+.ruler-val b { font-family: var(--serif); font-size: 26px; color: var(--accent); min-width: 2.4ch; text-align: right; font-variant-numeric: tabular-nums; }
+.ruler-val small { color: var(--muted); font-size: 13px; font-weight: 600; margin: 6px 8px 0 2px; }
+.rb { width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); color: var(--accent); font-weight: 700; font-size: 18px; line-height: 1; padding: 0; }
+.rb[data-d="-1"] { margin-right: 8px; }
+.ruler-track { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; height: 58px; margin-top: 4px;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 20%, #000 80%, transparent); mask-image: linear-gradient(90deg, transparent, #000 20%, #000 80%, transparent); }
+.ruler-track::-webkit-scrollbar { display: none; }
+.ruler-strip { display: flex; height: 100%; width: max-content; }
+.ruler-strip .sp { flex: none; width: 50%; }
+.ruler-strip i { flex: none; width: var(--tw); height: 100%; position: relative; scroll-snap-align: center; font-style: normal; }
+.ruler-strip i::before { content: ""; position: absolute; left: 50%; top: 0; width: 1.5px; height: 12px; background: var(--muted); opacity: .45; transform: translateX(-50%); border-radius: 2px; }
+.ruler-strip i.m::before { height: 18px; opacity: .65; }
+.ruler-strip i.M::before { height: 26px; width: 2px; opacity: .9; }
+.ruler-strip i em { position: absolute; top: 31px; left: 50%; transform: translateX(-50%); font-size: 12px; font-style: normal; color: var(--muted); font-weight: 600; }
+.ruler::after { content: ""; position: absolute; left: 50%; bottom: 22px; width: 3px; height: 34px; background: var(--accent); border-radius: 3px; transform: translateX(-50%); pointer-events: none; }

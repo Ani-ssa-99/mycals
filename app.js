@@ -143,6 +143,50 @@ function render() {
   else renderProfile(app);
 }
 
+
+/* ---------- Molette défilante (règle) ---------- */
+function ruler({ name, label, unit, min, max, step, value }) {
+  const n = Math.round((max - min) / step);
+  const major = step < 1 ? 10 : 5;
+  const tw = step < 1 ? 9 : 14;
+  let ticks = "";
+  for (let i = 0; i <= n; i++) {
+    const v = min + i * step;
+    const big = i % major === 0;
+    const mid = step < 1 && i % 5 === 0 && !big;
+    ticks += `<i class="${big ? "M" : mid ? "m" : ""}">${big ? `<em>${r0(v)}</em>` : ""}</i>`;
+  }
+  const dec = step < 1 ? 1 : 0;
+  return `<div class="ruler" data-min="${min}" data-step="${step}" data-n="${n}" data-dec="${dec}" data-tw="${tw}" style="--tw:${tw}px">
+    <div class="ruler-head"><span class="ruler-label">${label}</span><span class="ruler-val"><button type="button" class="rb" data-d="-1" aria-label="Moins">−</button><b>${Number(value).toFixed(dec).replace(".", ",")}</b><small>${unit}</small><button type="button" class="rb" data-d="1" aria-label="Plus">+</button></span></div>
+    <div class="ruler-track"><div class="ruler-strip"><span class="sp"></span>${ticks}<span class="sp"></span></div></div>
+    <input type="hidden" name="${name}" value="${value}">
+  </div>`;
+}
+function bindRulers(root) {
+  $$(".ruler", root).forEach(r => {
+    const min = +r.dataset.min, step = +r.dataset.step, n = +r.dataset.n, dec = +r.dataset.dec, tw = +r.dataset.tw;
+    const track = $(".ruler-track", r), out = $(".ruler-val b", r), input = $("input", r);
+    let last = null, touched = false;
+    track.addEventListener("pointerdown", () => (touched = true), { passive: true });
+    const setIdx = (i, scroll) => {
+      i = Math.max(0, Math.min(n, i));
+      const v = +(min + i * step).toFixed(dec);
+      input.value = v; out.textContent = v.toFixed(dec).replace(".", ",");
+      if (touched && last !== null && last !== i) try { navigator.vibrate?.(3); } catch {}
+      last = i;
+      if (scroll) track.scrollTo({ left: i * tw, behavior: "smooth" });
+    };
+    const start = Math.round((parseFloat(input.value) - min) / step);
+    const place = () => { r.querySelectorAll(".sp").forEach(sp => (sp.style.width = (track.clientWidth - tw) / 2 + "px")); track.scrollLeft = start * tw; };
+    setIdx(start);
+    requestAnimationFrame(place);
+    setTimeout(() => { if (Math.abs(track.scrollLeft - (last ?? start) * tw) > tw) place(); }, 350);
+    track.addEventListener("scroll", () => setIdx(Math.round(track.scrollLeft / tw)), { passive: true });
+    $$(".rb", r).forEach(b => (b.onclick = () => setIdx(last + +b.dataset.d, true)));
+  });
+}
+
 /* ---------- Onboarding / profil ---------- */
 function profileForm(p = {}) {
   const sex = p.sex || "f";
@@ -152,14 +196,12 @@ function profileForm(p = {}) {
   <div class="stack">
     <div><label class="field"><span>Sexe</span></label>
       <div class="seg" data-seg="sex"><button type="button" data-v="f" class="${sex === "f" ? "on" : ""}">Femme</button><button type="button" data-v="m" class="${sex === "m" ? "on" : ""}">Homme</button></div></div>
-    <div class="grid3">
-      <label class="field"><span>Âge</span><input class="input" name="age" type="number" inputmode="numeric" min="12" max="100" value="${p.age || ""}" placeholder="25" required></label>
-      <label class="field"><span>Taille (cm)</span><input class="input" name="heightCm" type="number" inputmode="numeric" min="120" max="230" value="${p.heightCm || ""}" placeholder="165" required></label>
-      <label class="field"><span>Poids (kg)</span><input class="input" name="weightKg" type="number" inputmode="decimal" step="0.1" min="30" max="300" value="${p.weightKg || ""}" placeholder="70" required></label>
-    </div>
+    ${ruler({ name: "age", label: "Âge", unit: "ans", min: 12, max: 100, step: 1, value: p.age || 25 })}
+    ${ruler({ name: "heightCm", label: "Taille", unit: "cm", min: 120, max: 220, step: 1, value: p.heightCm || 165 })}
+    ${ruler({ name: "weightKg", label: "Poids actuel", unit: "kg", min: 30, max: 200, step: 0.1, value: p.weightKg || 70 })}
     <label class="field"><span>Niveau d'activité</span>
       <select class="input" name="activity">${ACTIVITY.map(a => `<option value="${a.v}" ${a.v === act ? "selected" : ""}>${a.label} (${a.sub})</option>`).join("")}</select></label>
-    <label class="field"><span>Poids visé (kg)</span><input class="input" name="goalWeightKg" type="number" inputmode="decimal" step="0.1" min="30" max="300" value="${p.goalWeightKg || ""}" placeholder="62" required></label>
+    ${ruler({ name: "goalWeightKg", label: "Poids visé", unit: "kg", min: 30, max: 200, step: 0.1, value: p.goalWeightKg || 62 })}
     <div><label class="field"><span>Rythme de perte</span></label>
       <div class="seg" data-seg="pace">
         ${[[0.25, "Doux"], [0.5, "Conseillé"], [0.75, "Rapide"]].map(([v, l]) => `<button type="button" data-v="${v}" class="${v === pace ? "on" : ""}">${l}<br><span class="small muted">${String(v).replace(".", ",")} kg/sem</span></button>`).join("")}
@@ -167,6 +209,7 @@ function profileForm(p = {}) {
   </div>`;
 }
 function bindProfileForm(root) {
+  bindRulers(root);
   $$("[data-seg]", root).forEach(seg => $$("button", seg).forEach(b => (b.onclick = () => { $$("button", seg).forEach(x => x.classList.remove("on")); b.classList.add("on"); })));
 }
 function readProfileForm(root) {
@@ -802,12 +845,13 @@ function renderProgress(app) {
   $$("[data-delw]").forEach(b => (b.onclick = () => { if (S.weights.length <= 1) return toast("Garde au moins une pesée"); S.weights = S.weights.filter(w => w.date !== b.dataset.delw); save(); render(); }));
 }
 function openWeight() {
-  openSheet(`<h2>Nouvelle pesée</h2><div class="grid2">
-    <label class="field"><span>Poids (kg)</span><input class="input" id="w" type="number" inputmode="decimal" step="0.1" value="${r1(currentWeight())}"></label>
-    <label class="field"><span>Date</span><input class="input" id="d" type="date" value="${todayKey()}" max="${todayKey()}"></label></div>
+  openSheet(`<h2>Nouvelle pesée</h2>
+    ${ruler({ name: "w", label: "Poids", unit: "kg", min: 30, max: 200, step: 0.1, value: r1(currentWeight()) })}
+    <label class="field" style="margin-top:12px"><span>Date</span><input class="input" id="d" type="date" value="${todayKey()}" max="${todayKey()}"></label>
     <button class="btn" id="ok" style="margin-top:14px">Enregistrer</button>`, (s, close) => {
+    bindRulers(s);
     $("#ok", s).onclick = () => {
-      const kg = parseFloat($("#w", s).value.replace(",", ".")); const date = $("#d", s).value || todayKey();
+      const kg = parseFloat($("[name=w]", s).value); const date = $("#d", s).value || todayKey();
       if (!(kg > 25 && kg < 350)) return toast("Poids invalide");
       const prev = currentWeight();
       S.weights = S.weights.filter(w => w.date !== date); S.weights.push({ date, kg }); save();
