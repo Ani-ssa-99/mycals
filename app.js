@@ -144,46 +144,26 @@ function render() {
 }
 
 
-/* ---------- Molette défilante (règle) ---------- */
+/* ---------- Listes déroulantes (roue de choix native sur iPhone) ---------- */
 function ruler({ name, label, unit, min, max, step, value }) {
-  const n = Math.round((max - min) / step);
-  const major = step < 1 ? 10 : 5;
-  const tw = step < 1 ? 9 : 14;
-  let ticks = "";
-  for (let i = 0; i <= n; i++) {
-    const v = min + i * step;
-    const big = i % major === 0;
-    const mid = step < 1 && i % 5 === 0 && !big;
-    ticks += `<i class="${big ? "M" : mid ? "m" : ""}">${big ? `<em>${r0(v)}</em>` : ""}</i>`;
-  }
-  const dec = step < 1 ? 1 : 0;
-  return `<div class="ruler" data-min="${min}" data-step="${step}" data-n="${n}" data-dec="${dec}" data-tw="${tw}" style="--tw:${tw}px">
-    <div class="ruler-head"><span class="ruler-label">${label}</span><span class="ruler-val"><button type="button" class="rb" data-d="-1" aria-label="Moins">−</button><b>${Number(value).toFixed(dec).replace(".", ",")}</b><small>${unit}</small><button type="button" class="rb" data-d="1" aria-label="Plus">+</button></span></div>
-    <div class="ruler-track"><div class="ruler-strip"><span class="sp"></span>${ticks}<span class="sp"></span></div></div>
-    <input type="hidden" name="${name}" value="${value}">
+  const dec = step < 1;
+  const v = Number(value);
+  const ip = Math.floor(v + 1e-9), fp = Math.round((v - ip) * 10);
+  let opts = "";
+  for (let i = min; i <= max; i++) opts += `<option value="${i}" ${i === ip ? "selected" : ""}>${i}</option>`;
+  const decSel = dec ? `<span class="pk-sep">,</span><select class="pk-sel pk-dec" aria-label="${label} (décimale)">${Array.from({ length: 10 }, (_, d) => `<option value="${d}" ${d === fp ? "selected" : ""}>${d}</option>`).join("")}</select>` : "";
+  return `<div class="picker" data-dec="${dec ? 1 : 0}">
+    <span class="pk-label">${label}</span>
+    <span class="pk-ctrl"><select class="pk-sel pk-int" aria-label="${label}">${opts}</select>${decSel}<span class="pk-unit">${unit}</span></span>
+    <input type="hidden" name="${name}" value="${v}">
   </div>`;
 }
 function bindRulers(root) {
-  $$(".ruler", root).forEach(r => {
-    const min = +r.dataset.min, step = +r.dataset.step, n = +r.dataset.n, dec = +r.dataset.dec, tw = +r.dataset.tw;
-    const track = $(".ruler-track", r), out = $(".ruler-val b", r), input = $("input", r);
-    let last = null, touched = false;
-    track.addEventListener("pointerdown", () => (touched = true), { passive: true });
-    const setIdx = (i, scroll) => {
-      i = Math.max(0, Math.min(n, i));
-      const v = +(min + i * step).toFixed(dec);
-      input.value = v; out.textContent = v.toFixed(dec).replace(".", ",");
-      if (touched && last !== null && last !== i) try { navigator.vibrate?.(3); } catch {}
-      last = i;
-      if (scroll) track.scrollTo({ left: i * tw, behavior: "smooth" });
-    };
-    const start = Math.round((parseFloat(input.value) - min) / step);
-    const place = () => { r.querySelectorAll(".sp").forEach(sp => (sp.style.width = (track.clientWidth - tw) / 2 + "px")); track.scrollLeft = start * tw; };
-    setIdx(start);
-    requestAnimationFrame(place);
-    setTimeout(() => { if (Math.abs(track.scrollLeft - (last ?? start) * tw) > tw) place(); }, 350);
-    track.addEventListener("scroll", () => setIdx(Math.round(track.scrollLeft / tw)), { passive: true });
-    $$(".rb", r).forEach(b => (b.onclick = () => setIdx(last + +b.dataset.d, true)));
+  root.querySelectorAll(".picker").forEach(p => {
+    const int = p.querySelector(".pk-int"), dec = p.querySelector(".pk-dec"), input = p.querySelector("input");
+    const sync = () => { input.value = dec ? +(+int.value + +dec.value / 10).toFixed(1) : +int.value; };
+    int.onchange = sync; if (dec) dec.onchange = sync;
+    sync();
   });
 }
 
