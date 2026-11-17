@@ -1,6 +1,7 @@
 import { BASE_FOODS } from "./foods.js";
 import { analyzeMeal, prepareImage, testKey } from "./ai.js";
 import { lookupBarcode, searchOFF } from "./off.js";
+import { RECIPES, SESSIONS, MOVES, PLANS } from "./tips.js";
 
 /* ---------- utilitaires ---------- */
 const $ = (s, r = document) => r.querySelector(s);
@@ -140,6 +141,7 @@ function render() {
   if (tab === "today") renderToday(app);
   else if (tab === "progress") renderProgress(app);
   else if (tab === "foods") renderFoods(app);
+  else if (tab === "tips") renderTips(app);
   else renderProfile(app);
 }
 
@@ -267,7 +269,8 @@ function dateLabel(k) {
 function entryThumb(e) {
   if (e.thumb) return `<img src="${e.thumb}" alt="">`;
   if (e.img) return `<img src="${esc(e.img)}" alt="" loading="lazy" onerror="this.remove()">`;
-  return { ia: "📸", off: "🏷️", quick: "⚡", base: "🥗", custom: "⭐" }[e.source] || "🍴";
+  if (e.emoji) return e.emoji;
+  return { ia: "📸", off: "🏷️", quick: "⚡", base: "🥗", custom: "⭐", recette: "🥗" }[e.source] || "🍴";
 }
 
 function renderToday(app) {
@@ -296,6 +299,11 @@ function renderToday(app) {
     </div>
     ${MEALS.map(m => mealCard(m, d)).join("")}
     <div class="card">
+      <div class="meal-head"><h2>🏃‍♀️ Activité</h2><span class="meal-kcal">${(d.activities || []).length ? "−" + fmtNum((d.activities || []).reduce((a, x) => a + x.kcal, 0)) + " kcal" : ""}</span></div>
+      ${(d.activities || []).map(a => `<div class="entry"><div class="thumb">${a.emoji || "🏃‍♀️"}</div><div class="grow"><div class="name">${esc(a.name)}</div><div class="meta">${a.min} min</div></div><div class="kcal">−${fmtNum(a.kcal)}</div><button class="btn sm ghost" data-del-act="${a.id}" aria-label="Supprimer">✕</button></div>`).join("")}
+      <button class="add-line" id="go-tips">${(d.activities || []).length ? "+ Ajouter une séance" : "Voir les séances conseillées"}</button>
+    </div>
+    <div class="card">
       <div class="row between"><h2 style="margin:0">💧 Eau</h2><span class="muted small">${d.water || 0} / 8 verres</span></div>
       <div class="chips" style="margin-top:10px" id="water">${Array.from({ length: 8 }, (_, i) => `<button class="chip ${i < (d.water || 0) ? "on" : ""}" data-i="${i}">💧</button>`).join("")}</div>
     </div>`;
@@ -305,6 +313,8 @@ function renderToday(app) {
   $$("[data-add-meal]").forEach(b => (b.onclick = () => openAddMenu(b.dataset.addMeal)));
   $$("[data-entry]").forEach(b => (b.onclick = () => openEntry(b.dataset.entry)));
   $$("[data-copy-meal]").forEach(b => (b.onclick = () => copyYesterday(b.dataset.copyMeal)));
+  $("#go-tips").onclick = () => { tipsView = "sport"; setTab("tips"); };
+  $$("[data-del-act]").forEach(b => (b.onclick = () => { d.activities = d.activities.filter(a => a.id !== b.dataset.delAct); save(); render(); }));
   bindInstallBanner();
 }
 function mealCard(m, d) {
@@ -889,6 +899,115 @@ function openCreateFood() {
   });
 }
 
+
+/* ---------- Conseils : plats sains et sport ---------- */
+let tipsView = "food";
+let recipeFilter = "auto";
+function fitnessLevel() {
+  const a = S.profile.activity;
+  return a <= 1.2 ? 0 : a <= 1.375 ? (S.profile.age >= 55 ? 0 : 1) : a <= 1.55 ? 1 : 2;
+}
+function sessionKcal(sess) { return r0((sess.met * currentWeight() * sess.min) / 60); }
+function weekKey(k) { const d = parseKey(k); const day = (d.getDay() + 6) % 7; d.setDate(d.getDate() - day); return keyOf(d); }
+function renderTips(app) {
+  app.innerHTML = `
+    <div class="header"><div><div class="muted small">Adapté à ton objectif</div><h1>Conseils</h1></div></div>
+    <div class="seg" id="tv" style="margin-bottom:14px"><button data-v="food" class="${tipsView === "food" ? "on" : ""}">🥗 Plats sains</button><button data-v="sport" class="${tipsView === "sport" ? "on" : ""}">💪 Exercices</button></div>
+    <div id="tips-body"></div>`;
+  $$("#tv button").forEach(b => (b.onclick = () => { tipsView = b.dataset.v; renderTips(app); }));
+  if (tipsView === "food") renderRecipes($("#tips-body")); else renderSport($("#tips-body"));
+}
+function renderRecipes(el) {
+  const t = targets();
+  const tot = totals(day(todayKey()).entries);
+  const left = t.kcal - tot.kcal;
+  const protLeft = t.prot - tot.p;
+  const next = defaultMeal();
+  const meal = recipeFilter === "auto" ? next : recipeFilter;
+  let list = RECIPES.filter(r => recipeFilter === "all" || r.meal === meal);
+  const highProt = protLeft > t.prot * 0.5;
+  list = [...list].sort((a, b) => (recipeFilter === "auto" ? (Math.abs(a.kcal - Math.min(left, 600)) - Math.abs(b.kcal - Math.min(left, 600))) : 0) + (highProt ? (b.p - a.p) * 2 : 0));
+  const fits = r => r.kcal <= Math.max(left, 0) + 30;
+  let intro;
+  if (left <= 120) intro = `Tu as presque atteint ton objectif du jour (${fmtNum(Math.max(left, 0))} kcal restantes). Si tu as faim, mise sur une collation très légère : légumes croquants, tisane, fromage blanc 0 %.`;
+  else intro = `Il te reste <b>${fmtNum(left)} kcal</b> aujourd'hui${protLeft > 10 ? ` et <b>${r0(protLeft)} g de protéines</b> à aller chercher` : ""}. Voici des idées pour ${mealName(next).toLowerCase() === "collations" ? "ta collation" : "ton " + mealName(next).toLowerCase()}${highProt ? ", riches en protéines pour rester rassasiée" : ""}.`;
+  el.innerHTML = `
+    <div class="banner"><div style="font-size:24px">💡</div><div>${intro}</div></div>
+    <div class="chips" id="rf" style="margin-bottom:12px">
+      ${[["auto", "Pour maintenant"], ...MEALS.map(m => [m.id, m.name]), ["all", "Tout"]].map(([v, l]) => `<button class="chip ${recipeFilter === v ? "on" : ""}" data-v="${v}">${l}</button>`).join("")}
+    </div>
+    ${list.map(r => `<button class="card recipe" data-r="${r.id}">
+      <div class="row"><div class="rec-emoji">${r.emoji}</div><div class="grow"><div style="font-weight:700">${esc(r.name)}</div>
+        <div class="small muted">${mealName(r.meal)} · ${r.min} min${r.tags.includes("veggie") ? " · 🌱" : ""}</div>
+        <div class="small" style="margin-top:4px"><b>${r.kcal} kcal</b> <span class="muted">· P ${r.p} · G ${r.c} · L ${r.f}</span></div>
+        <div style="margin-top:6px">${fits(r) ? `<span class="badge">✓ Rentre dans ton budget</span>` : `<span class="badge warn">Dépasse ton budget du jour</span>`}</div></div></div>
+    </button>`).join("")}
+    <p class="small muted" style="text-align:center">Valeurs indicatives pour une portion.</p>`;
+  $$("#rf .chip", el).forEach(b => (b.onclick = () => { recipeFilter = b.dataset.v; renderRecipes(el); }));
+  $$("[data-r]", el).forEach(b => (b.onclick = () => openRecipe(RECIPES.find(r => r.id === b.dataset.r))));
+}
+function openRecipe(r) {
+  openSheet(`
+    <div class="row" style="margin-bottom:10px"><div class="rec-emoji big">${r.emoji}</div><div class="grow"><h2 style="margin:0">${esc(r.name)}</h2><div class="small muted">${mealName(r.meal)} · ${r.min} min · 1 portion</div></div></div>
+    <div class="kv"><div><b>${r.kcal}</b><span>kcal</span></div><div><b>${r.p}</b><span>Prot. (g)</span></div><div><b>${r.c}</b><span>Gluc. (g)</span></div><div><b>${r.f}</b><span>Lip. (g)</span></div></div>
+    <h3 style="margin:16px 0 6px">Ingrédients</h3><ul class="steps">${r.ing.map(i => `<li>${esc(i)}</li>`).join("")}</ul>
+    <h3 style="margin:12px 0 6px">Préparation</h3><p style="margin:0 0 16px;font-size:15px">${esc(r.steps)}</p>
+    <label class="field" style="margin-bottom:12px"><span>Ajouter à</span><select class="input" id="meal">${MEALS.map(m => `<option value="${m.id}" ${m.id === (curDate === todayKey() ? defaultMeal() : r.meal) ? "selected" : ""}>${m.name}</option>`).join("")}</select></label>
+    <button class="btn" id="add">J'ai mangé ça</button>`, (s, close) => {
+    $("#add", s).onclick = () => {
+      curDate = todayKey();
+      addEntry({ meal: $("#meal", s).value, name: r.name, kcal: r.kcal, p: r.p, c: r.c, f: r.f, source: "recette", emoji: r.emoji });
+      close(); toast(`Ajouté : ${r.kcal} kcal`); setTab("today");
+    };
+  });
+}
+function renderSport(el) {
+  const p = S.profile;
+  const lvl = fitnessLevel();
+  const plan = PLANS[lvl];
+  const left = r1(currentWeight() - p.goalWeightKg);
+  const wk = weekKey(todayKey());
+  let done = 0, burned = 0;
+  for (let i = 0; i < 7; i++) { const k = addDays(wk, i); (S.days[k]?.activities || []).forEach(a => { done++; burned += a.kcal; }); }
+  const focus = left > 10 ? "Avec plus de 10 kg à perdre, privilégie les activités douces pour les articulations (marche, vélo, danse) et ajoute du renforcement pour garder tes muscles."
+    : left > 3 ? "Combine cardio et renforcement : c'est le duo le plus efficace pour perdre du gras et affiner la silhouette."
+    : left > 0 ? "Tu es proche du but : le renforcement musculaire va tonifier et sculpter, la balance bougera moins mais ton corps changera."
+    : "Objectif atteint : garde ce rythme pour stabiliser ton poids durablement.";
+  const sessions = plan.week.map(id => SESSIONS.find(x => x.id === id));
+  const others = SESSIONS.filter(x => x.levels.includes(lvl) && !plan.week.includes(x.id));
+  const sessCard = x => `<button class="card recipe" data-s="${x.id}"><div class="row"><div class="rec-emoji">${x.emoji}</div><div class="grow"><div style="font-weight:700">${esc(x.name)}</div>
+      <div class="small muted">${x.min} min · ≈ ${fmtNum(sessionKcal(x))} kcal</div></div><span class="badge">${{ cardio: "Cardio", renfo: "Renfo", doux: "Récup" }[x.kind]}</span></div></button>`;
+  el.innerHTML = `
+    <div class="card">
+      <div class="row between"><div><div class="muted small">Ton programme</div><div style="font-family:var(--serif);font-size:22px;font-weight:700">Niveau ${p.sex === "m" ? plan.levelM : plan.level}</div></div>
+        <div style="text-align:right"><div style="font-family:var(--serif);font-size:22px;font-weight:700;color:var(--accent)">${done} / ${plan.perWeek}</div><div class="small muted">séances cette semaine</div></div></div>
+      <div class="pbar" style="margin-top:10px"><i style="width:${Math.min(100, (done / plan.perWeek) * 100)}%"></i></div>
+      <p class="small" style="margin:12px 0 0">${plan.text} ${focus}</p>
+      ${burned ? `<p class="small muted" style="margin:8px 0 0">Cette semaine : ≈ ${fmtNum(burned)} kcal dépensées en plus 🔥</p>` : ""}
+    </div>
+    <h2 style="margin:18px 0 10px">Ta semaine type</h2>
+    ${sessions.map(sessCard).join("")}
+    ${others.length ? `<h2 style="margin:18px 0 10px">Pour varier</h2>${others.map(sessCard).join("")}` : ""}
+    <p class="small muted" style="text-align:center">Calories estimées selon ton poids. Les dépenses ne sont pas ajoutées à ton objectif calorique : ton niveau d'activité est déjà pris en compte, c'est donc un bonus pour ton déficit. En cas de douleur ou de problème de santé, demande l'avis d'un médecin.</p>`;
+  $$("[data-s]", el).forEach(b => (b.onclick = () => openSession(SESSIONS.find(x => x.id === b.dataset.s))));
+}
+function openSession(x) {
+  openSheet(`
+    <div class="row" style="margin-bottom:10px"><div class="rec-emoji big">${x.emoji}</div><div class="grow"><h2 style="margin:0">${esc(x.name)}</h2><div class="small muted">${x.min} min · ≈ ${fmtNum(sessionKcal(x))} kcal pour toi</div></div></div>
+    <p style="margin:0 0 12px">${esc(x.desc)}</p>
+    ${x.moves.length ? `<div class="stack" style="margin-bottom:16px">${x.moves.map((m, i) => `<div class="move"><span class="num">${i + 1}</span><div><b>${esc(MOVES[m].name)}</b><div class="small muted">${esc(MOVES[m].how)}</div></div></div>`).join("")}</div>` : ""}
+    <label class="field" style="margin-bottom:12px"><span>Durée réelle</span><select class="input" id="dur">${[10, 15, 20, 25, 30, 35, 40, 45, 60, 75, 90].map(m => `<option value="${m}" ${m === x.min ? "selected" : ""}>${m} min</option>`).join("")}</select></label>
+    <button class="btn" id="done">C'est fait ✓</button>`, (s, close) => {
+    $("#done", s).onclick = () => {
+      const min = +$("#dur", s).value;
+      const kcal = r0((x.met * currentWeight() * min) / 60);
+      const d = day(todayKey());
+      (d.activities ||= []).push({ id: uid(), sid: x.id, name: x.name, emoji: x.emoji, min, kcal, time: Date.now() });
+      save(); close(); render(); toast(`Bravo ! ≈ ${fmtNum(kcal)} kcal dépensées 💪`);
+    };
+  });
+}
+
 /* ---------- Profil ---------- */
 function renderProfile(app) {
   const t = targets();
@@ -900,6 +1019,7 @@ function renderProfile(app) {
       <label class="field" style="margin-top:14px"><span>Objectif personnalisé (laisser vide = calcul automatique)</span>
         <div class="row"><input class="input" id="ovr" type="number" inputmode="numeric" placeholder="Auto" value="${S.settings.targetOverride || ""}"><button class="btn sm" id="ovr-ok">OK</button></div></label>
     </div>
+    <div class="card"><button class="btn ghost" id="myfoods">⭐ Mes aliments et récents</button></div>
     <form class="card" id="pf"><h2>Mes infos</h2>${profileForm({ ...S.profile, weightKg: r1(currentWeight()) })}<button class="btn" style="margin-top:14px" type="submit">Mettre à jour</button></form>
     <div class="card">
       <h2>📸 Reconnaissance photo (IA)</h2>
@@ -929,6 +1049,7 @@ function renderProfile(app) {
     save(); showTargetResult(false);
   };
   $("#det").onclick = () => showTargetResult(false);
+  $("#myfoods").onclick = () => setTab("foods");
   $("#ovr-ok").onclick = () => { const v = parseInt($("#ovr").value, 10); S.settings.targetOverride = v >= 800 && v <= 6000 ? v : null; save(); render(); toast(S.settings.targetOverride ? "Objectif personnalisé enregistré" : "Calcul automatique"); };
   $("#key").onclick = () => openKeySetup();
   $("#share").onclick = shareApp;

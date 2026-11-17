@@ -288,3 +288,14 @@ a { color: var(--accent-2); }
 .pk-unit { color: var(--muted); font-size: 14px; font-weight: 600; margin-left: 4px; min-width: 26px; }
 
 h1, .hero-title, .result-big, .ring .big { font-variant-numeric: lining-nums; }
+
+/* Conseils */
+.card.recipe { display: block; width: 100%; text-align: left; padding: 14px; margin-bottom: 10px; }
+.rec-emoji { width: 48px; height: 48px; border-radius: 14px; background: var(--accent-soft); display: grid; place-items: center; font-size: 26px; flex: none; }
+.rec-emoji.big { width: 60px; height: 60px; font-size: 32px; }
+.move { display: flex; gap: 12px; align-items: flex-start; }
+.move .num { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--card); display: grid; place-items: center; font-weight: 700; font-size: 13px; flex: none; margin-top: 2px; }
+.entry .btn.sm.ghost { padding: 4px 9px; }
+ul.steps { padding-left: 20px; margin: 0; font-size: 14px; }
+
+body { font-variant-numeric: lining-nums; }
