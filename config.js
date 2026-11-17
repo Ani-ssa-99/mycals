@@ -10,7 +10,7 @@ export const FIREBASE_CONFIG = {
 };
 
 // Connexions proposées sur l'écran d'accueil.
-export const PROVIDERS = { google: true, facebook: true, email: true };
+export const PROVIDERS = { google: true, facebook: false, email: true };
 
 // Utilise les émulateurs locaux (tests) si l'URL contient ?emu
 export const USE_EMULATORS = typeof location !== "undefined" && new URLSearchParams(location.search).has("emu");
