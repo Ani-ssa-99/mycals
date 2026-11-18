@@ -503,7 +503,7 @@ function openQuickAdd(meal, prefill = {}) {
 /* ---------- Recherche ---------- */
 function localSearch(q) {
   const nq = norm(q).trim(); if (!nq) return [];
-  const words = nq.split(/\s+/);
+  const words = nq.split(/\s+/).map(w => w.length > 3 ? w.replace(/(s|x)$/, "") : w); // "kakis" trouve "kaki"
   const pool = [...S.custom, ...S.recent, ...BASE_FOODS];
   const seen = new Set();
   return pool.filter(f => {

@@ -1,5 +1,5 @@
 // Service worker : l'appli s'ouvre même sans connexion.
-const VERSION = "mycals-v9";
+const VERSION = "mycals-v10";
 const SHELL = ["./", "index.html", "styles.css", "app.js", "ai.js", "off.js", "foods.js", "tips.js", "cloud.js", "config.js", "manifest.webmanifest",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 
